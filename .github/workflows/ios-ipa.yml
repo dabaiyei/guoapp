@@ -106,6 +106,7 @@ jobs:
       - name: 发布 Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           edition='${{ needs.ios.outputs.edition }}'
