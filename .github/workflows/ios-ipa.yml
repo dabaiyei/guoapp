@@ -1,0 +1,72 @@
+# 在云端 macOS runner 上构建未签名 IPA（红果鉴 / 真果鉴）
+#
+# 用法：
+#   1. Fork https://github.com/zhoufuweigg/guoapp 到你自己的账号
+#   2. 把这个文件放到 fork 仓库的 .github/workflows/ios-ipa.yml
+#   3. 仓库 Settings -> Actions -> General 允许运行 workflow
+#   4. Actions 页选 "Build iOS IPA" -> Run workflow，勾选需要的版本
+#   5. 跑完在该次 run 的 Artifacts 里下载 ipa-* 压缩包，里面是未签名 IPA
+#
+# 说明：public 仓库的 macOS runner 不消耗付费额度。私有仓库会消耗 macOS 分钟数（x10 倍率）。
+# 未签名 IPA 需要自行签名才能装到 iPhone（Windows 上可用 Sideloadly / AltStore）。
+
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      all_sources:
+        description: '构建真果鉴（全部站源）。不勾选则构建仅红果的红果鉴'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-ipa.yml'
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # scripts/build_ios.py 用 go build -buildmode=c-archive 生成 DuanjuCore.xcframework
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      # pubspec.lock 已提交，脚本用 --enforce-lockfile，SDK 版本必须匹配
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 显示工具链
+        run: |
+          flutter --version
+          go version
+          xcodebuild -version
+          pod --version || sudo gem install cocoapods
+
+      - name: 构建（未签名 IPA + Runner.app zip）
+        run: |
+          python3 scripts/build_ios.py ${{ inputs.all_sources && '--all-sources' || '' }}
+
+      - name: 校验产物
+        run: |
+          ls -lh dist/ios/
+          cat dist/ios/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa-${{ inputs.all_sources && 'zhenguojian' || 'hongguojian' }}
+          path: dist/ios/*
+          if-no-files-found: error
+          retention-days: 30
