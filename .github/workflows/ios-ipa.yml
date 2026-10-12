@@ -1,13 +1,11 @@
-# 在云端 macOS runner 上构建未签名 IPA（红果鉴 / 真果鉴）
+# 在云端 macOS runner 上构建未签名 IPA（红果鉴 / 真果鉴），并自动发布到 Releases
 #
 # 用法：
-#   1. Fork https://github.com/zhoufuweigg/guoapp 到你自己的账号
-#   2. 把这个文件放到 fork 仓库的 .github/workflows/ios-ipa.yml
-#   3. 仓库 Settings -> Actions -> General 允许运行 workflow
-#   4. Actions 页选 "Build iOS IPA" -> Run workflow，勾选需要的版本
-#   5. 跑完在该次 run 的 Artifacts 里下载 ipa-* 压缩包，里面是未签名 IPA
+#   1. 把此文件放到仓库的 .github/workflows/ios-ipa.yml
+#   2. Actions 页选 "Build iOS IPA" -> Run workflow，勾选需要的版本与是否发布
+#   3. 构建产物在本次 run 的 Artifacts 里；勾选 publish 后同时出现在 Releases
 #
-# 说明：public 仓库的 macOS runner 不消耗付费额度。私有仓库会消耗 macOS 分钟数（x10 倍率）。
+# 说明：public 仓库的 macOS runner 不消耗付费额度。
 # 未签名 IPA 需要自行签名才能装到 iPhone（Windows 上可用 Sideloadly / AltStore）。
 
 name: Build iOS IPA
@@ -19,17 +17,38 @@ on:
         description: '构建真果鉴（全部站源）。不勾选则构建仅红果的红果鉴'
         type: boolean
         default: false
+      publish:
+        description: '构建成功后发布到 Releases'
+        type: boolean
+        default: true
   push:
     branches: [main]
     paths:
       - '.github/workflows/ios-ipa.yml'
 
+permissions:
+  contents: write
+
 jobs:
   ios:
     runs-on: macos-latest
     timeout-minutes: 90
+    outputs:
+      edition: ${{ steps.meta.outputs.edition }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: 计算版本与 edition
+        id: meta
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.all_sources }}" = "true" ]; then
+            echo "edition=zhenguojian" >> "$GITHUB_OUTPUT"
+          else
+            echo "edition=hongguojian" >> "$GITHUB_OUTPUT"
+          fi
 
       # scripts/build_ios.py 用 go build -buildmode=c-archive 生成 DuanjuCore.xcframework
       - uses: actions/setup-go@v5
@@ -66,7 +85,43 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ipa-${{ inputs.all_sources && 'zhenguojian' || 'hongguojian' }}
+          name: ipa-${{ steps.meta.outputs.edition }}
           path: dist/ios/*
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    needs: ios
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ipa-${{ needs.ios.outputs.edition }}
+          path: dist
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          edition='${{ needs.ios.outputs.edition }}'
+          version='${{ needs.ios.outputs.version }}'
+          tag="ios-v${version//+/-}-${edition}"
+          echo "发布 tag=$tag"
+          ls -lh dist/
+          {
+            printf '%s\n\n' "版本 ${version}（${edition}）。未签名 IPA，需自行签名后才能安装。"
+            printf '%s\n' "- *-ios-unsigned.ipa：未签名 IPA，用 AltStore / Sideloadly / TrollStore 自签后安装"
+            printf '%s\n' "- *-ios-unsigned-app.zip：未签名 Runner.app，供自行签名 / 打包"
+            printf '\n%s\n' "校验：SHA256SUMS.txt"
+          } > notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --title "红果鉴 / 真果鉴 ${version} (iOS ${edition})" --notes-file notes.md
+          else
+            gh release create "$tag" dist/* --title "红果鉴 / 真果鉴 ${version} (iOS ${edition})" --notes-file notes.md
+          fi
