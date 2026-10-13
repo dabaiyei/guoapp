@@ -677,15 +677,25 @@ func (engine *nativeEngine) nativeCastStatusPayload(ctx context.Context) map[str
 	result["qualities"] = current.qualities
 	result["supportsVolume"] = current.device.RenderingControlURL != ""
 	state := ""
+	positionMS, durationMS := int64(0), int64(0)
 	if payload, err := nativeCastSOAP(ctx, current.device.ControlURL, current.device.ServiceType, "GetTransportInfo", [][2]string{{"InstanceID", "0"}}); err == nil {
 		state = nativeCastTag(payload, "CurrentTransportState")
 	}
 	if payload, err := nativeCastSOAP(ctx, current.device.ControlURL, current.device.ServiceType, "GetPositionInfo", [][2]string{{"InstanceID", "0"}}); err == nil {
-		result["positionMs"] = nativeCastMilliseconds(nativeCastTag(payload, "RelTime"))
-		result["durationMs"] = nativeCastMilliseconds(nativeCastTag(payload, "TrackDuration"))
+		positionMS = nativeCastMilliseconds(nativeCastTag(payload, "RelTime"))
+		durationMS = nativeCastMilliseconds(nativeCastTag(payload, "TrackDuration"))
+		result["positionMs"] = positionMS
+		result["durationMs"] = durationMS
 	}
 	result["state"] = state
+	// 电视走到片尾通常会转为 STOPPED；据此判断本集已播完，供上层自动续播。
+	result["ended"] = nativeCastEnded(state, positionMS, durationMS)
 	return result
+}
+
+// 投屏是否已播完：电视停在片尾时状态多为 STOPPED，且位置已接近总时长。
+func nativeCastEnded(state string, positionMS, durationMS int64) bool {
+	return state == "STOPPED" && durationMS > 0 && positionMS >= durationMS-3000
 }
 
 func (engine *nativeEngine) nativeCastStop(ctx context.Context, silent bool) (any, error) {

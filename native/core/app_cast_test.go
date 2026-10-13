@@ -184,3 +184,28 @@ func TestNativeCastDescribePicksAVTransportFromServiceList(t *testing.T) {
 		t.Fatalf("rendering url = %q", description.RenderingControlURL)
 	}
 }
+
+// 播完判定：电视走到片尾多为 STOPPED，且位置接近总时长。
+func TestNativeCastEndedDetection(t *testing.T) {
+	cases := []struct {
+		state       string
+		positionMS  int64
+		durationMS  int64
+		want        bool
+		description string
+	}{
+		{"STOPPED", 123500, 123500, true, "停在片尾"},
+		{"STOPPED", 121000, 123500, true, "距片尾 2.5s 视作播完"},
+		{"STOPPED", 120000, 123500, false, "距片尾 3.5s 不算播完"},
+		{"STOPPED", 60000, 123500, false, "中途停止不算播完"},
+		{"PLAYING", 123500, 123500, false, "播放中不算播完"},
+		{"PAUSED_PLAYBACK", 123500, 123500, false, "暂停不算播完"},
+		{"STOPPED", 0, 0, false, "时长未知时不算播完"},
+		{"", 123500, 123500, false, "状态未知时不算播完"},
+	}
+	for _, item := range cases {
+		if got := nativeCastEnded(item.state, item.positionMS, item.durationMS); got != item.want {
+			t.Fatalf("%s: ended=%v want %v", item.description, got, item.want)
+		}
+	}
+}

@@ -710,20 +710,38 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && !_closed) setState(() => _panelOpen = false);
     }
     if (!started || !mounted || _closed) return;
-    unawaited(_watchCast(cast));
+    _bindCastEnded(cast);
     await _openCastControl(cast);
   }
 
-  /// 进入投屏遥控页；返回后若投屏已停止则恢复本机播放。
+  /// 电视播完当前集时，按本机「自动连播」设置续播下一集。
+  void _bindCastEnded(CastController cast) {
+    cast.onEnded = () async {
+      if (_closed ||
+          widget.store.profileEpoch != _profileEpoch ||
+          !cast.active) {
+        return;
+      }
+      final next = cast.episode + 1;
+      if (!_autoAdvance || next >= widget.detail.episodes.length) {
+        await cast.stop();
+        return;
+      }
+      await _castEpisode(cast, next, _generation);
+    };
+  }
+
+  /// 进入投屏遥控页。返回时视为「退出投屏」：停止投屏并把进度带回本机继续播放。
   Future<void> _openCastControl(CastController cast) async {
     if (!mounted || _closed) return;
+    _bindCastEnded(cast);
     final generation = _generation;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => CastControlScreen(
           controller: cast,
           detail: widget.detail,
-          index: _index,
+          index: cast.episode,
           repository: widget.repository,
           onEpisode: (next) => _castEpisode(cast, next, generation),
           onQuality: (quality) => _castQuality(cast, quality, generation),
@@ -731,14 +749,24 @@ class _PlayerScreenState extends State<PlayerScreen>
         ),
       ),
     );
-    if (cast.active) return;
     if (!mounted ||
         _closed ||
         generation != _generation ||
         widget.store.profileEpoch != _profileEpoch) {
       return;
     }
-    await _play(_index);
+    if (!cast.active) return;
+    // 退出投屏页即结束投屏，并从电视当前进度接着在本机播放，避免丢进度。
+    final episode = cast.episode;
+    final position = cast.lastPosition;
+    cast.onEnded = null;
+    await cast.stop();
+    if (!mounted || _closed || generation != _generation) return;
+    await _play(
+      episode,
+      position: position.inMilliseconds / 1000,
+      playWhenReady: false,
+    );
   }
 
   /// 投屏中切集：重新解析该集线路后推给电视。
@@ -769,6 +797,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       title:
           '${widget.detail.drama.title} · 第 ${episode.number} 集',
       quality: _requestedQuality,
+      episode: index,
     );
   }
 
@@ -780,7 +809,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     int generation,
   ) async {
     if (await cast.switchQuality(quality)) return;
-    final index = _index;
+    final index = cast.episode;
     if (index < 0 || index >= widget.detail.episodes.length) return;
     final episode = widget.detail.episodes[index];
     final plan = await widget.repository.resolve(
@@ -804,6 +833,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       title: '${widget.detail.drama.title} · 第 ${episode.number} 集',
       positionMs: position.inMilliseconds,
       quality: quality,
+      episode: index,
     );
   }
 
@@ -828,24 +858,28 @@ class _PlayerScreenState extends State<PlayerScreen>
           '第 ${widget.detail.episodes[index].number} 集',
       positionMs: cast.status.position.inMilliseconds,
       quality: cast.status.quality,
+      episode: index,
     );
   }
 
-  Future<void> _watchCast(CastController cast) async {
-    while (mounted && !_closed && cast.active) {
-      await Future<void>.delayed(const Duration(seconds: 3));
-      if (!mounted || _closed || !cast.active) break;
-      await cast.refreshStatus();
-    }
-  }
-
+  /// 手动结束投屏并从电视进度接着本机播放。
   Future<void> _stopCast() async {
-    await CastController.current?.stop();
+    final cast = CastController.current;
+    if (cast == null) return;
+    final episode = cast.episode;
+    final position = cast.lastPosition;
+    cast.onEnded = null;
+    await cast.stop();
     if (!mounted || _closed) return;
-    await _play(_index);
+    await _play(
+      episode,
+      position: position.inMilliseconds / 1000,
+      playWhenReady: false,
+    );
   }
 
-  void _syncPreload() {    if (_closed) return;
+  void _syncPreload() {
+    if (_closed) return;
     if (!_preloadEnabled ||
         !_foreground ||
         widget.localOnly ||

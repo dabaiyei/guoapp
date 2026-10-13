@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'cast_controller.dart';
 import 'core_bridge.dart';
 import 'models.dart';
+import 'widgets.dart';
 
 /// 投屏控制页：进入后手机变遥控器，电视独立播放，手机可熄屏。
 class CastControlScreen extends StatefulWidget {
@@ -30,33 +31,39 @@ class CastControlScreen extends StatefulWidget {
 }
 
 class _CastControlScreenState extends State<CastControlScreen> {
-  Timer? _ticker;
   double? _dragValue;
-  int _index = 0;
 
   @override
   void initState() {
     super.initState();
-    _index = widget.index;
-    _ticker = Timer.periodic(const Duration(seconds: 2), (_) {
-      unawaited(widget.controller.refreshStatus());
-    });
+    // 状态轮询由 CastController 统一持有，页面只负责展示与刷新。
+    unawaited(widget.controller.refreshStatus());
   }
 
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
+  Episode get _episode {
+    final index = widget.controller.episode;
+    if (index < 0 || index >= widget.detail.episodes.length) {
+      return widget.detail.episodes[widget.index.clamp(
+        0,
+        widget.detail.episodes.length - 1,
+      )];
+    }
+    return widget.detail.episodes[index];
   }
 
-  Episode get _episode => widget.detail.episodes[_index];
+  int get _episodeIndex {
+    final index = widget.controller.episode;
+    if (index < 0 || index >= widget.detail.episodes.length) {
+      return widget.index;
+    }
+    return index;
+  }
 
   String _qualityLabel(int quality) =>
       quality > 0 ? '${quality}P' : '自动';
 
   Future<void> _switchEpisode(int next) async {
     if (next < 0 || next >= widget.detail.episodes.length) return;
-    setState(() => _index = next);
     await widget.onEpisode(next);
   }
 
@@ -162,11 +169,11 @@ class _CastControlScreenState extends State<CastControlScreen> {
                         _CastTransport(
                           playing: status.playing,
                           busy: widget.controller.busy,
-                          onPrevious: _index > 0
-                              ? () => _switchEpisode(_index - 1)
+                          onPrevious: _episodeIndex > 0
+                              ? () => _switchEpisode(_episodeIndex - 1)
                               : null,
-                          onNext: _index + 1 < widget.detail.episodes.length
-                              ? () => _switchEpisode(_index + 1)
+                          onNext: _episodeIndex + 1 < widget.detail.episodes.length
+                              ? () => _switchEpisode(_episodeIndex + 1)
                               : null,
                           onRewind: () => widget.controller.seek(
                             Duration(
@@ -297,7 +304,7 @@ class _CastControlScreenState extends State<CastControlScreen> {
                       ),
                   itemCount: widget.detail.episodes.length,
                   itemBuilder: (context, index) {
-                    final active = index == _index;
+                    final active = index == _episodeIndex;
                     return InkWell(
                       onTap: () => Navigator.of(context).pop(index),
                       child: Container(
@@ -324,7 +331,7 @@ class _CastControlScreenState extends State<CastControlScreen> {
         ),
       ),
     );
-    if (picked != null && picked != _index) {
+    if (picked != null && picked != _episodeIndex) {
       await _switchEpisode(picked);
     }
   }
@@ -353,15 +360,8 @@ class _CastHero extends StatelessWidget {
         height: 200,
         width: double.infinity,
         child: Opacity(
-          opacity: .28,
-          child: drama.cover.isEmpty
-              ? const ColoredBox(color: Color(0xFF201d2a))
-              : Image.network(
-                  drama.cover,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) =>
-                      const ColoredBox(color: Color(0xFF201d2a)),
-                ),
+          opacity: .3,
+          child: DramaCover(drama: drama, repository: repository, radius: 0),
         ),
       ),
       Column(
