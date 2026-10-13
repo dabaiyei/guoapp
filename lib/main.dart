@@ -12,6 +12,7 @@ import 'core_bridge.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
+import 'cast_controller.dart';
 import 'home_screen.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
@@ -24,7 +25,7 @@ import 'diary_service.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
-  DiaryService.add('[App] 应用启动，版本: 0.2.64+71, 平台: ${Platform.operatingSystem}');
+  DiaryService.add('[App] 应用启动，版本: 0.2.65+73, 平台: ${Platform.operatingSystem}');
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(AppTheme.systemBars(Brightness.dark));
@@ -62,6 +63,8 @@ class _AppBootstrapState extends State<AppBootstrap>
     WidgetsBinding.instance.removeObserver(this);
     LanController.current?.dispose();
     LanController.current = null;
+    CastController.current?.dispose();
+    CastController.current = null;
     MediaLibrary.current?.dispose();
     MediaLibrary.current = null;
     store?.dispose();
@@ -121,6 +124,8 @@ class _AppBootstrapState extends State<AppBootstrap>
           store = LocalStore(preferences);
           repository.access = store;
           MediaLibrary.attach(repository, store!);
+          CastController.current?.dispose();
+          CastController.current = CastController(repository, store!);
           LanController.current?.dispose();
           final link = LanController(
             repository,

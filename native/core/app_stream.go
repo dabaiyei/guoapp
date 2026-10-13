@@ -40,11 +40,13 @@ type nativeStreamSession struct {
 }
 
 type nativeStreamServer struct {
-	mu         sync.Mutex
-	downloader *Downloader
-	address    string
-	sessions   map[string]*nativeStreamSession
-	server     *http.Server
+	mu            sync.Mutex
+	downloader    *Downloader
+	address       string
+	publicAddress string
+	port          int
+	sessions      map[string]*nativeStreamSession
+	server        *http.Server
 }
 
 func (stream *nativeStreamServer) nativeRequest(request *http.Request) (*http.Response, error) {
@@ -53,18 +55,33 @@ func (stream *nativeStreamServer) nativeRequest(request *http.Request) (*http.Re
 	return stream.downloader.doMediaRequestWithClient(request, &client)
 }
 
+func (stream *nativeStreamServer) origin() string {
+	if stream.publicAddress != "" {
+		return stream.publicAddress
+	}
+	return stream.address
+}
+
 var nativePlaylistURI = regexp.MustCompile(`URI="([^"]+)"`)
 
-func newNativeStreamServer(d *Downloader) (*nativeStreamServer, error) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+func newNativeStreamServerAt(d *Downloader, listen string) (*nativeStreamServer, error) {
+	listener, err := net.Listen("tcp4", listen)
 	if err != nil {
 		return nil, errors.New("无法初始化本机播放器")
 	}
-	stream := &nativeStreamServer{downloader: d, address: "http://" + listener.Addr().String(), sessions: map[string]*nativeStreamSession{}}
+	port := 0
+	if address, ok := listener.Addr().(*net.TCPAddr); ok {
+		port = address.Port
+	}
+	stream := &nativeStreamServer{downloader: d, address: "http://" + listener.Addr().String(), port: port, sessions: map[string]*nativeStreamSession{}}
 	server := &http.Server{Handler: http.HandlerFunc(stream.nativeServe), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16384}
 	stream.server = server
 	go func() { _ = server.Serve(listener) }()
 	return stream, nil
+}
+
+func newNativeStreamServer(d *Downloader) (*nativeStreamServer, error) {
+	return newNativeStreamServerAt(d, "127.0.0.1:0")
 }
 
 func (stream *nativeStreamServer) nativeOpen(media providerMedia) (string, string) {
@@ -141,7 +158,7 @@ func (stream *nativeStreamServer) nativeAsset(token string, session *nativeStrea
 		session.assets[id] = asset
 	}
 	session.mu.Unlock()
-	return stream.address + "/" + token + "/" + id
+	return stream.origin() + "/" + token + "/" + id
 }
 
 func (stream *nativeStreamServer) nativeRewrite(token string, session *nativeStreamSession, body, base string) (string, error) {

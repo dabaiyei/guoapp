@@ -12,6 +12,8 @@ import 'package:window_manager/window_manager.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
+import 'cast_controller.dart';
+import 'cast_screen.dart';
 import 'core_bridge.dart';
 import 'diary_service.dart';
 import 'luna_exo_player.dart';
@@ -653,8 +655,78 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  void _syncPreload() {
-    if (_closed) return;
+  Future<void> _castToDevice() async {
+    final cast = CastController.current;
+    if (cast == null ||
+        _panelOpen ||
+        _closed ||
+        _loading ||
+        _error != null ||
+        widget.mediaId != null) {
+      return;
+    }
+    final generation = _generation;
+    final index = _index;
+    final plan = _plan;
+    bool current() =>
+        mounted &&
+        !_closed &&
+        generation == _generation &&
+        index == _index &&
+        widget.store.profileEpoch == _profileEpoch;
+    _interactions.cancel();
+    setState(() => _panelOpen = true);
+    try {
+      final casting = await showCastPanel(
+        context,
+        cast,
+        title:
+            widget.detail.drama.title +
+            ' · 第 ' +
+            widget.detail.episodes[index].number.toString() +
+            ' 集',
+        session: () {
+          final play = plan;
+          return play != null && !play.local ? play.session : '';
+        },
+        position: () => Duration(
+          milliseconds: (_currentPosition * 1000).round(),
+        ),
+        onCasting: () async {
+          if (!current()) throw StateError('本机播放内容已变更');
+          await _stopForLan();
+          if (!current()) throw StateError('本机播放内容已变更');
+        },
+      );
+      if (casting && mounted) {
+        unawaited(_watchCast(cast));
+      }
+    } catch (error) {
+      if (mounted && !_closed) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted && !_closed) setState(() => _panelOpen = false);
+    }
+  }
+
+  Future<void> _watchCast(CastController cast) async {
+    while (mounted && !_closed && cast.active) {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted || _closed || !cast.active) break;
+      await cast.refreshStatus();
+    }
+  }
+
+  Future<void> _stopCast() async {
+    await CastController.current?.stop();
+    if (!mounted || _closed) return;
+    await _play(_index);
+  }
+
+  void _syncPreload() {    if (_closed) return;
     if (!_preloadEnabled ||
         !_foreground ||
         widget.localOnly ||
@@ -1572,11 +1644,19 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ),
             body: pictureInPicture
                 ? _videoPane(context)
-                : SafeArea(
-                    top: !_television && (fullscreen || _mobile),
-                    bottom: !fullscreen,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
+                : Column(
+                    children: [
+                      if (CastController.current != null)
+                        CastBanner(
+                          controller: CastController.current!,
+                          onStop: _stopCast,
+                        ),
+                      Expanded(
+                        child: SafeArea(
+                          top: !_television && (fullscreen || _mobile),
+                          bottom: !fullscreen,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
                         final desktop = constraints.maxWidth >= 840;
                         if (fullscreen) {
                           return _videoPane(context);
@@ -1626,8 +1706,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                             Expanded(child: _episodePanel()),
                           ],
                         );
-                      },
-                    ),
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
           ),
         ),
@@ -1691,6 +1774,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ? _retryDanmakuFromControls
                 : null,
             onPush: widget.mediaId == null ? _pushToDevice : null,
+            onCast: widget.mediaId == null ? _castToDevice : null,
             onPictureInPicture: _canUsePictureInPicture
                 ? _enterPictureInPicture
                 : null,

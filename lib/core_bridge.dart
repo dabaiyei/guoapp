@@ -71,6 +71,10 @@ abstract class AppRepository {
     String command,
     Map<String, dynamic> payload,
   ) async => throw AppFailure('当前环境不支持设备互联');
+  Future<Map<String, dynamic>> cast(
+    String command,
+    Map<String, dynamic> payload,
+  ) async => throw AppFailure('当前环境不支持投屏');
   Future<PlaybackPlan?> prepareHandoff(
     Drama drama,
     Episode episode, {
@@ -200,6 +204,12 @@ class NativeRepository extends AppRepository {
     String command,
     Map<String, dynamic> payload,
   ) => _call({'action': 'lan', 'command': command, 'lan': payload});
+
+  @override
+  Future<Map<String, dynamic>> cast(
+    String command,
+    Map<String, dynamic> payload,
+  ) => _call({'action': 'cast', 'command': command, 'cast': payload});
 
   @override
   Future<PlaybackPlan?> prepareHandoff(
@@ -516,7 +526,11 @@ class NativeRepository extends AppRepository {
                 'respond',
                 'cancel',
                 'disconnect',
-              }.contains(input['command']);
+              }.contains(input['command']) ||
+          action == 'cast' &&
+              {'stop', 'status', 'pause', 'resume', 'seek', 'volume'}.contains(
+                input['command'],
+              );
       final epoch = access?.profileEpoch;
       if (!unrestricted && access?.locked == true) throw AppFailure('请先解锁当前用户');
       if (action == 'rankings') {

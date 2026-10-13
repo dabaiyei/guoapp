@@ -95,6 +95,7 @@ type nativeDrama struct {
 
 type nativeInput struct {
 	LAN              json.RawMessage         `json:"lan"`
+	Cast             json.RawMessage         `json:"cast"`
 	ExpectedVersions map[string]string       `json:"expectedVersions"`
 	SystemProxy      nativeSystemProxy       `json:"systemProxy"`
 	Settings         nativeResourceSettings  `json:"settings"`
@@ -177,6 +178,10 @@ type nativeEngine struct {
 	sourceRecords    map[string]nativeSourceRecord
 	sourceCatalogMu  sync.Mutex
 	sourceCatalogs   map[string]chan struct{}
+	castMu           sync.Mutex
+	castDevices      map[string]nativeCastDevice
+	castSession      *nativeCastSession
+	castServer       *nativeStreamServer
 }
 
 var nativeState struct {
@@ -381,6 +386,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 	switch input.Action {
 	case "lan":
 		return engine.nativeLAN(ctx, input.Command, input.LAN)
+	case "cast":
+		return engine.nativeCast(ctx, input.Command, input.Cast)
 	case "updateSystemProxy":
 		return true, engine.updateSystemProxy(input.SystemProxy)
 	case "resourceSettings":

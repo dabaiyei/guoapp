@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'app_layout.dart';
+import 'cast_controller.dart';
 import 'lan_controller.dart';
 import 'player_interactions.dart';
 import 'widgets.dart';
@@ -38,6 +39,7 @@ class PlayerControls extends StatefulWidget {
     this.onDanmaku,
     this.onRetryDanmaku,
     this.onPush,
+    this.onCast,
     this.onPictureInPicture,
     this.enhancement,
   });
@@ -68,6 +70,7 @@ class PlayerControls extends StatefulWidget {
   final Future<void> Function()? onDanmaku;
   final Future<void> Function()? onRetryDanmaku;
   final Future<void> Function()? onPush;
+  final Future<void> Function()? onCast;
   final Future<void> Function()? onPictureInPicture;
   final VideoEnhancementController? enhancement;
 
@@ -697,6 +700,31 @@ class _PlayerControlsState extends State<PlayerControls> {
     );
   }
 
+  Widget _castTool(Key key) {
+    final cast = CastController.current;
+    if (cast == null || widget.onCast == null) return const SizedBox.shrink();
+    return AnimatedBuilder(
+      animation: cast,
+      builder: (context, _) => _toolButton(
+        key: key,
+        tooltip: cast.active ? '正在投屏到 ${cast.status.device}' : '投屏到电视',
+        onPressed: widget.enabled ? () => _panel(widget.onCast!) : null,
+        child: cast.busy
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                cast.active
+                    ? Icons.cast_connected_rounded
+                    : Icons.connected_tv_rounded,
+                size: 22,
+              ),
+      ),
+    );
+  }
+
   Widget _clusteredToolRow(List<Widget> tools) {
     if (tools.isEmpty) return const SizedBox.shrink();
     if (tools.length <= 5) {
@@ -767,6 +795,7 @@ class _PlayerControlsState extends State<PlayerControls> {
         ),
       ],
       if (showPush) _lanPushTool(const ValueKey('fullscreen-lan-push')),
+      if (widget.onCast != null) _castTool(const ValueKey('player-cast')),
       if (showEpisodes)
         _toolIcon(
           key: const ValueKey('player-episodes'),
@@ -835,6 +864,8 @@ class _PlayerControlsState extends State<PlayerControls> {
           icon: Icons.grid_view_rounded,
           onPressed: widget.enabled ? () => _panel(widget.onEpisodes) : null,
         ),
+      if (widget.onCast != null)
+        _castTool(const ValueKey('mobile-player-cast')),
       if (widget.onPictureInPicture != null)
         _toolIcon(
           key: const ValueKey('player-picture-in-picture'),
