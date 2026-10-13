@@ -90,6 +90,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final _recovery = PlaybackRecovery();
   Object _lanIdentity = Object();
+  CastController? _castProgressCast;
+  DateTime _lastCastSaveAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _handoffOwned = true;
   double? _lanFirstPosition;
   String? _savedProgressKey;
@@ -350,6 +352,32 @@ class _PlayerScreenState extends State<PlayerScreen>
         );
       }
     });
+  }
+
+  /// 投屏期间把电视进度也写入本机观看记录：
+  /// 这样即使直接杀掉应用，下次进入仍能接着上次投屏的位置。
+  Future<void> _saveCastProgress(CastController cast) async {
+    if (widget.mediaId != null || widget.store.profileEpoch != _profileEpoch) {
+      return;
+    }
+    final status = cast.status;
+    if (!status.active) return;
+    final index = cast.episode;
+    if (index < 0 || index >= widget.detail.episodes.length) return;
+    final position = status.position.inMilliseconds / 1000;
+    final duration = status.duration.inMilliseconds / 1000;
+    if (position < 1 || duration <= 0) return;
+    try {
+      await widget.store.saveWatch(
+        WatchEntry(
+          drama: widget.repository.catalogUpdates.current(widget.detail.drama),
+          episode: widget.detail.episodes[index].number,
+          position: position,
+          duration: duration,
+          updatedAt: DateTime.now(),
+        ),
+      );
+    } catch (_) {}
   }
 
   void _accessChanged() {
@@ -731,10 +759,28 @@ class _PlayerScreenState extends State<PlayerScreen>
     };
   }
 
+  /// 监听投屏状态变化，把电视进度同步进本机观看记录。
+  void _bindCastProgress(CastController cast) {
+    if (_castProgressCast == cast) return;
+    _castProgressCast?.removeListener(_onCastStatusChanged);
+    _castProgressCast = cast;
+    cast.addListener(_onCastStatusChanged);
+  }
+
+  void _onCastStatusChanged() {
+    final cast = _castProgressCast;
+    if (cast == null || !cast.active || _closed) return;
+    final seconds = DateTime.now().difference(_lastCastSaveAt).inSeconds;
+    if (seconds < 5) return;
+    _lastCastSaveAt = DateTime.now();
+    unawaited(_saveCastProgress(cast));
+  }
+
   /// 进入投屏遥控页。返回时视为「退出投屏」：停止投屏并把进度带回本机继续播放。
   Future<void> _openCastControl(CastController cast) async {
     if (!mounted || _closed) return;
     _bindCastEnded(cast);
+    _bindCastProgress(cast);
     final generation = _generation;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -1677,6 +1723,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     _closed = true;
     final enhancementClosed = _enhancement.close();
     LanController.current?.detachPlayback(_lanIdentity);
+    _castProgressCast?.removeListener(_onCastStatusChanged);
+    _castProgressCast = null;
+    final cast = CastController.current;
+    if (cast != null && cast.active) {
+      unawaited(_saveCastProgress(cast));
+      cast.onEnded = null;
+      unawaited(cast.stop());
+    }
     widget.handoff?.fail('接收端已退出播放');
     widget.store.removeListener(_accessChanged);
     _danmaku.dispose();
