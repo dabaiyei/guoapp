@@ -77,14 +77,33 @@ type nativeUPnPDescription struct {
 	Device nativeUPnPDevice `xml:"device"`
 }
 
-func nativeCastMessage() string {
+// 国产电视/盒子对 ST 的支持差异很大：只发 MediaRenderer 往往搜不到，
+// 必须逐个尝试，其中 ssdp:all 与 upnp:rootdevice 的应答率最高。
+const (
+	nativeCastSearchAll    = "ssdp:all"
+	nativeCastSearchRoot   = "upnp:rootdevice"
+	nativeCastSearchAVT    = "urn:schemas-upnp-org:service:AVTransport:1"
+	nativeCastSearchRender = "urn:schemas-upnp-org:device:MediaRenderer:2"
+)
+
+func nativeCastSearchMessages() []string {
+	return []string{
+		nativeCastRenderer,
+		nativeCastSearchAll,
+		nativeCastSearchRoot,
+		nativeCastSearchRender,
+		nativeCastSearchAVT,
+	}
+}
+
+func nativeCastMessage(searchType string) string {
 	return strings.Join([]string{
 		"M-SEARCH * HTTP/1.1",
 		"HOST: 239.255.255.250:1900",
 		`MAN: "ssdp:discover"`,
 		"MX: 2",
-		"ST: " + nativeCastRenderer,
-		"USER-AGENT: duanju-cast/1.0",
+		"ST: " + searchType,
+		"USER-AGENT: duoxiang/1.0 UPnP/1.1 DuanjuCast/1.0",
 		"", "",
 	}, "\r\n")
 }
@@ -114,8 +133,15 @@ func nativeCastUDPAddress(host string) *net.UDPAddr {
 	return address
 }
 
-func nativeCastExchange(targets []*net.UDPAddr, deadline time.Duration) []string {
-	message := nativeCastMessage()
+// 组播发送必须绑定到实际局域网网卡，否则在多网卡（Wi-Fi + 蜂窝/VPN）设备上会走错出口而收不到应答。
+func nativeCastBind(bindIP net.IP) *net.UDPAddr {
+	if bindIP == nil || bindIP.To4() == nil {
+		return &net.UDPAddr{}
+	}
+	return &net.UDPAddr{IP: bindIP.To4()}
+}
+
+func nativeCastExchange(targets []*net.UDPAddr, messages []string, deadline time.Duration, bindIP net.IP) []string {
 	list := []string{}
 	seen := map[string]bool{}
 	record := func(payload string) {
@@ -125,18 +151,23 @@ func nativeCastExchange(targets []*net.UDPAddr, deadline time.Duration) []string
 			list = append(list, location)
 		}
 	}
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if len(targets) == 0 || len(messages) == 0 {
+		return list
+	}
+	conn, err := net.ListenUDP("udp4", nativeCastBind(bindIP))
 	if err != nil {
 		return list
 	}
 	defer conn.Close()
 	stop := time.Now().Add(deadline)
 	_ = conn.SetWriteDeadline(stop)
-	for _, target := range targets {
-		if target == nil {
-			continue
+	for _, message := range messages {
+		payload := []byte(nativeCastMessage(message))
+		for _, target := range targets {
+			if target != nil {
+				_, _ = conn.WriteToUDP(payload, target)
+			}
 		}
-		_, _ = conn.WriteToUDP([]byte(message), target)
 	}
 	_ = conn.SetReadDeadline(stop)
 	buffer := make([]byte, 4096)
@@ -306,14 +337,18 @@ func (engine *nativeEngine) nativeCastDiscover(ctx context.Context, input native
 			}
 		}
 	}
-	add(nativeCastExchange(nativeCastMulticastTargets(), nativeCastSearch))
-	if host := nativeCastUDPAddress(input.Host); host != nil {
-		add(nativeCastExchange([]*net.UDPAddr{host}, nativeCastSearch))
-	}
-	// 单播扫描整个子网：iOS 发送组播需要 Apple 特批权限，单播不受限，是更可靠的发现路径。
+	// 组播三连：多种 ST + 绑定到局域网网卡，覆盖应答策略各异的电视。
 	host := nativeLANIPv4()
+	bindIP := net.ParseIP(host)
+	messages := nativeCastSearchMessages()
+	add(nativeCastExchange(nativeCastMulticastTargets(), messages, nativeCastSearch, bindIP))
+	// 上次用过的/手填的地址优先直接问，适合组播被系统拦截的场景。
+	if unicast := nativeCastUDPAddress(input.Host); unicast != nil {
+		add(nativeCastExchange([]*net.UDPAddr{unicast}, messages, nativeCastSearch, bindIP))
+	}
+	// 单播扫描整个子网：iOS 发送组播需要 Apple 特批权限，单播不受限，兜底最可靠。
 	if host != "" {
-		add(nativeCastExchange(nativeCastSubnetTargets(host), nativeCastSearch+600*time.Millisecond))
+		add(nativeCastExchange(nativeCastSubnetTargets(host), messages, nativeCastSearch+800*time.Millisecond, bindIP))
 	}
 	devices := []nativeCastDevice{}
 	mu := sync.Mutex{}

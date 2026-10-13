@@ -105,21 +105,18 @@ class CastController extends ChangeNotifier {
     return repository.cast(command, {...payload, if (_manualHost.isNotEmpty) 'host': _manualHost});
   }
 
-  Future<void> scan({bool deep = false}) async {
+  Future<void> scan() async {
     if (_scanning) return;
     _scanning = true;
     _error = '';
     notifyListeners();
     try {
-      final result = await _call('discover', {'scan': deep});
+      final result = await _call('discover');
       final rows = (result['devices'] as List? ?? const []);
       _devices = [
         for (final row in rows)
           if (row is Map) CastDevice.fromJson(row.cast<String, dynamic>()),
       ];
-      if (_devices.isEmpty) {
-        _error = '没有找到可投屏的设备，请确认电视与本机在同一 Wi-Fi。';
-      }
       if (_selected != null &&
           !_devices.any((device) => device.id == _selected!.id)) {
         _selected = null;

@@ -72,6 +72,7 @@ class _CastPanel extends StatefulWidget {
 
 class _CastPanelState extends State<_CastPanel> {
   final _manual = TextEditingController();
+  bool _manualOpen = false;
 
   @override
   void initState() {
@@ -135,7 +136,7 @@ class _CastPanelState extends State<_CastPanel> {
                   tooltip: '重新搜索',
                   onPressed: controller.scanning
                       ? null
-                      : () => controller.scan(deep: true),
+                      : () => controller.scan(),
                   icon: controller.scanning
                       ? const SizedBox(
                           width: 20,
@@ -173,16 +174,7 @@ class _CastPanelState extends State<_CastPanel> {
           const SizedBox(height: 4),
           Expanded(
             child: controller.devices.isEmpty
-                ? Center(
-                    child: Text(
-                      controller.scanning ? '正在搜索电视…' : '没有发现设备',
-                      style: TextStyle(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  )
+                ? _CastEmptyState(scanning: controller.scanning)
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     itemCount: controller.devices.length,
@@ -203,36 +195,166 @@ class _CastPanelState extends State<_CastPanel> {
                   ),
           ),
           const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _manual,
-                    keyboardType: TextInputType.url,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      labelText: '电视 IP（搜索不到时手填）',
-                      hintText: '例如 192.168.1.8',
-                    ),
-                    onChanged: controller.setManualHost,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                FilledButton.tonal(
-                  onPressed: controller.scanning
-                      ? null
-                      : () => controller.scan(deep: true),
-                  child: const Text('连接'),
-                ),
-              ],
-            ),
+          _CastManualEntry(
+            controller: controller,
+            field: _manual,
+            expanded: _manualOpen,
+            onToggle: () => setState(() => _manualOpen = !_manualOpen),
           ),
         ],
       ),
     );
   }
+}
+
+/// 无设备时的引导：明确排查步骤，并说明「电视需开启投屏/无线显示」。
+class _CastEmptyState extends StatelessWidget {
+  const _CastEmptyState({required this.scanning});
+  final bool scanning;
+  @override
+  Widget build(BuildContext context) {
+    final hint = Theme.of(context).colorScheme.onSurfaceVariant;
+    if (scanning) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text('正在搜索局域网内的电视…', style: TextStyle(color: hint)),
+          const SizedBox(height: 6),
+          Text(
+            '约需 5 秒',
+            style: TextStyle(color: hint, fontSize: 12),
+          ),
+        ],
+      );
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tv_off_rounded, color: hint),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '没有发现可投屏的设备',
+                  style: TextStyle(color: hint, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _CastHint('手机和电视要连同一个 Wi-Fi（不能一个走 4G/5G）'),
+          _CastHint('在电视上打开「投屏」「无线显示」或「多屏互动」，不同品牌叫法不同'),
+          _CastHint('部分电视需要先进入投屏 App，电视才会响应搜索'),
+          _CastHint('公司/酒店网络常把设备互相隔离，这种情况搜不到是正常的'),
+        ],
+      ),
+    );
+  }
+}
+
+class _CastHint extends StatelessWidget {
+  const _CastHint(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 9),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '· ',
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// 手工 IP 入口默认收起，避免让用户以为必须填 IP。
+class _CastManualEntry extends StatelessWidget {
+  const _CastManualEntry({
+    required this.controller,
+    required this.field,
+    required this.expanded,
+    required this.onToggle,
+  });
+  final CastController controller;
+  final TextEditingController field;
+  final bool expanded;
+  final VoidCallback onToggle;
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      InkWell(
+        onTap: onToggle,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '搜不到？手动输入电视 IP',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              Icon(
+                expanded
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+                size: 20,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+      if (expanded)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: field,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    labelText: '电视 IP',
+                    hintText: '例如 192.168.1.8',
+                  ),
+                  onChanged: controller.setManualHost,
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton.tonal(
+                onPressed: controller.scanning
+                    ? null
+                    : () => controller.scan(),
+                child: const Text('连接'),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
 }
 
 /// 投屏进行中的悬浮控制条。

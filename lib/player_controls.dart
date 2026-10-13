@@ -681,7 +681,7 @@ class _PlayerControlsState extends State<PlayerControls> {
       builder: (context, _) => _toolButton(
         key: key,
         tooltip: link.connection == null
-            ? '推送'
+            ? '推送到另一台手机（需同款应用）'
             : '推送到 ${link.connection!.peer.name}',
         onPressed: widget.enabled ? () => _panel(widget.onPush!) : null,
         child: link.pushing
@@ -692,8 +692,8 @@ class _PlayerControlsState extends State<PlayerControls> {
               )
             : Icon(
                 link.connection == null
-                    ? Icons.cast_rounded
-                    : Icons.cast_connected_rounded,
+                    ? Icons.send_to_mobile_rounded
+                    : Icons.mobile_friendly_rounded,
                 size: 22,
               ),
       ),
