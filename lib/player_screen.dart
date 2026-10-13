@@ -13,6 +13,7 @@ import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
 import 'cast_controller.dart';
+import 'cast_control_screen.dart';
 import 'cast_screen.dart';
 import 'core_bridge.dart';
 import 'diary_service.dart';
@@ -676,8 +677,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         widget.store.profileEpoch == _profileEpoch;
     _interactions.cancel();
     setState(() => _panelOpen = true);
+    bool started = false;
     try {
-      final casting = await showCastPanel(
+      started = await showCastPanel(
         context,
         cast,
         title:
@@ -698,9 +700,6 @@ class _PlayerScreenState extends State<PlayerScreen>
           if (!current()) throw StateError('本机播放内容已变更');
         },
       );
-      if (casting && mounted) {
-        unawaited(_watchCast(cast));
-      }
     } catch (error) {
       if (mounted && !_closed) {
         ScaffoldMessenger.of(
@@ -710,6 +709,101 @@ class _PlayerScreenState extends State<PlayerScreen>
     } finally {
       if (mounted && !_closed) setState(() => _panelOpen = false);
     }
+    if (!started || !mounted || _closed) return;
+    unawaited(_watchCast(cast));
+    await _openCastControl(cast);
+  }
+
+  /// 进入投屏遥控页；返回后若投屏已停止则恢复本机播放。
+  Future<void> _openCastControl(CastController cast) async {
+    if (!mounted || _closed) return;
+    final generation = _generation;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => CastControlScreen(
+          controller: cast,
+          detail: widget.detail,
+          index: _index,
+          repository: widget.repository,
+          onEpisode: (next) => _castEpisode(cast, next, generation),
+          onQuality: (quality) => _castQuality(cast, quality, generation),
+        ),
+      ),
+    );
+    if (cast.active) return;
+    if (!mounted ||
+        _closed ||
+        generation != _generation ||
+        widget.store.profileEpoch != _profileEpoch) {
+      return;
+    }
+    await _play(_index);
+  }
+
+  /// 投屏中切集：重新解析该集线路后推给电视。
+  Future<void> _castEpisode(
+    CastController cast,
+    int index,
+    int generation,
+  ) async {
+    if (index < 0 || index >= widget.detail.episodes.length) return;
+    final episode = widget.detail.episodes[index];
+    final plan = await widget.repository.resolve(
+      widget.detail.drama,
+      episode,
+      quality: _requestedQuality,
+    );
+    if (!mounted ||
+        _closed ||
+        generation != _generation ||
+        widget.store.profileEpoch != _profileEpoch) {
+      await widget.repository.release(plan.session).catchError((Object _) {});
+      return;
+    }
+    final device = cast.selected;
+    if (device == null) return;
+    await cast.start(
+      device: device,
+      session: plan.session,
+      title:
+          '${widget.detail.drama.title} · 第 ${episode.number} 集',
+      quality: _requestedQuality,
+    );
+  }
+
+  /// 投屏中切清晰度：优先让原生在本机已解析的线路里就地切换（保留进度、最快）；
+  /// 若本地线路没有该清晰度，再重新解析该集线路后重投。
+  Future<void> _castQuality(
+    CastController cast,
+    int quality,
+    int generation,
+  ) async {
+    if (await cast.switchQuality(quality)) return;
+    final index = _index;
+    if (index < 0 || index >= widget.detail.episodes.length) return;
+    final episode = widget.detail.episodes[index];
+    final plan = await widget.repository.resolve(
+      widget.detail.drama,
+      episode,
+      quality: quality,
+    );
+    if (!mounted ||
+        _closed ||
+        generation != _generation ||
+        widget.store.profileEpoch != _profileEpoch) {
+      await widget.repository.release(plan.session).catchError((Object _) {});
+      return;
+    }
+    final device = cast.selected;
+    if (device == null) return;
+    final position = cast.status.position;
+    await cast.start(
+      device: device,
+      session: plan.session,
+      title: '${widget.detail.drama.title} · 第 ${episode.number} 集',
+      positionMs: position.inMilliseconds,
+      quality: quality,
+    );
   }
 
   Future<void> _watchCast(CastController cast) async {
@@ -1650,6 +1744,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                         CastBanner(
                           controller: CastController.current!,
                           onStop: _stopCast,
+                          onOpen: () {
+                            final cast = CastController.current;
+                            if (cast != null && cast.active) {
+                              unawaited(_openCastControl(cast));
+                            }
+                          },
                         ),
                       Expanded(
                         child: SafeArea(

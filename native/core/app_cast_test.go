@@ -141,6 +141,28 @@ func TestNativeCastResolveURLHandlesRelativeControlPaths(t *testing.T) {
 	}
 }
 
+func TestNativeCastPickMediaMatchesRequestedQuality(t *testing.T) {
+	choice := nativePlaybackChoice{
+		index: 0,
+		media: []providerMedia{
+			{URL: "https://host/1080.m3u8", Quality: 1080},
+			{URL: "https://host/720.m3u8", Quality: 720},
+			{URL: "https://host/480.m3u8", Quality: 480},
+		},
+	}
+	if got := nativeCastPickMedia(choice, 720); got.Quality != 720 {
+		t.Fatalf("quality 720 picked %d", got.Quality)
+	}
+	// 0 表示自动：沿用当前线路，不应乱选。
+	if got := nativeCastPickMedia(choice, 0); got.Quality != 1080 {
+		t.Fatalf("auto picked %d", got.Quality)
+	}
+	// 线路里没有该清晰度时回落到当前线路，而不是 panic。
+	if got := nativeCastPickMedia(choice, 2160); got.Quality != 1080 {
+		t.Fatalf("missing quality picked %d", got.Quality)
+	}
+}
+
 func TestNativeCastDescribePicksAVTransportFromServiceList(t *testing.T) {
 	body := `<?xml version="1.0"?><root><device>
 <friendlyName>客厅电视</friendlyName><modelName>MiTV</modelName>

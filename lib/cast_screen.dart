@@ -359,9 +359,15 @@ class _CastManualEntry extends StatelessWidget {
 
 /// 投屏进行中的悬浮控制条。
 class CastBanner extends StatelessWidget {
-  const CastBanner({super.key, required this.controller, this.onStop});
+  const CastBanner({
+    super.key,
+    required this.controller,
+    this.onStop,
+    this.onOpen,
+  });
   final CastController controller;
   final Future<void> Function()? onStop;
+  final VoidCallback? onOpen;
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
@@ -377,11 +383,17 @@ class CastBanner extends StatelessWidget {
               const Icon(Icons.cast_connected_rounded, size: 18),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  '正在投屏到 ${status.device}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13),
+                child: InkWell(
+                  onTap: onOpen,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Text(
+                      '正在投屏到 ${status.device} · 点此控制',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
                 ),
               ),
               IconButton(

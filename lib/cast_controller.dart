@@ -32,6 +32,10 @@ class CastStatus {
     this.state = '',
     this.positionMs = 0,
     this.durationMs = 0,
+    this.quality = 0,
+    this.qualities = const [],
+    this.supportsVolume = false,
+    this.volume = 0,
   });
   final bool active;
   final String deviceId;
@@ -40,6 +44,10 @@ class CastStatus {
   final String state;
   final int positionMs;
   final int durationMs;
+  final int quality;
+  final List<int> qualities;
+  final bool supportsVolume;
+  final int volume;
 
   factory CastStatus.fromJson(Map<String, dynamic> row) => CastStatus(
     active: row['active'] == true,
@@ -49,9 +57,33 @@ class CastStatus {
     state: (row['state'] ?? '').toString(),
     positionMs: (row['positionMs'] as num?)?.toInt() ?? 0,
     durationMs: (row['durationMs'] as num?)?.toInt() ?? 0,
+    quality: (row['quality'] as num?)?.toInt() ?? 0,
+    qualities: [
+      for (final value in (row['qualities'] as List? ?? const []))
+        if (value is num) value.toInt(),
+    ],
+    supportsVolume: row['supportsVolume'] == true,
+    volume: (row['volume'] as num?)?.toInt() ?? 0,
   );
 
   bool get playing => state == 'PLAYING';
+  bool get paused => state == 'PAUSED_PLAYBACK';
+  Duration get position => Duration(milliseconds: positionMs);
+  Duration get duration => Duration(milliseconds: durationMs);
+
+  Map<String, dynamic> toJson() => {
+    'active': active,
+    'deviceId': deviceId,
+    'device': device,
+    'title': title,
+    'state': state,
+    'positionMs': positionMs,
+    'durationMs': durationMs,
+    'quality': quality,
+    'qualities': qualities,
+    'supportsVolume': supportsVolume,
+    'volume': volume,
+  };
 }
 
 /// DLNA / UPnP 投屏：电视直接拉流播放，手机可以熄屏。
@@ -135,6 +167,7 @@ class CastController extends ChangeNotifier {
     required String session,
     required String title,
     int positionMs = 0,
+    int quality = 0,
   }) async {
     if (_busy) return;
     _busy = true;
@@ -148,12 +181,34 @@ class CastController extends ChangeNotifier {
           'session': session,
           'title': title,
           'targetMs': positionMs,
+          'quality': quality,
         }),
       );
       await BackgroundPlayback.begin();
+      await _refreshVolume();
     } catch (failure) {
       _error = failure is AppFailure ? failure.message : '$failure';
       rethrow;
+    } finally {
+      _busy = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// 投屏中切换到同一集的其他清晰度。
+  /// 返回 true 表示原生已就地切换（保留了进度），false 表示需要上层重新解析线路再投。
+  Future<bool> switchQuality(int quality) async {
+    if (_busy) return true;
+    _busy = true;
+    _error = '';
+    try {
+      _status = CastStatus.fromJson(
+        await _call('quality', {'quality': quality}),
+      );
+      return true;
+    } catch (failure) {
+      _error = failure is AppFailure ? failure.message : '$failure';
+      return false;
     } finally {
       _busy = false;
       if (!_disposed) notifyListeners();
@@ -193,9 +248,23 @@ class CastController extends ChangeNotifier {
     }
   }
 
-  Future<void> setVolume(int volume) async {
+  Future<void> _refreshVolume() async {
+    if (!_status.supportsVolume) return;
     try {
-      await _call('volume', {'volume': volume.clamp(0, 100)});
+      final result = await _call('volume');
+      final value = (result['volume'] as num?)?.toInt();
+      if (value != null && !_disposed) {
+        _status = CastStatus.fromJson({..._status.toJson(), 'volume': value});
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setVolume(int volume) async {
+    final value = volume.clamp(0, 100);
+    _status = CastStatus.fromJson({..._status.toJson(), 'volume': value});
+    if (!_disposed) notifyListeners();
+    try {
+      await _call('volume', {'volume': value, 'hasVolume': true});
     } catch (failure) {
       _error = failure is AppFailure ? failure.message : '$failure';
       if (!_disposed) notifyListeners();

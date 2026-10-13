@@ -35,6 +35,7 @@ type nativeCastInput struct {
 	TargetMS  int64  `json:"targetMs"`
 	Volume    int    `json:"volume"`
 	HasVolume bool   `json:"hasVolume"`
+	Quality   int    `json:"quality"`
 	Scan      bool   `json:"scan"`
 }
 
@@ -53,6 +54,8 @@ type nativeCastSession struct {
 	streamSession string
 	session       string
 	title         string
+	quality       int
+	qualities     []int
 	started       time.Time
 }
 
@@ -542,6 +545,46 @@ func (engine *nativeEngine) nativeCastCurrent() nativeCastSession {
 	return *engine.castSession
 }
 
+// 在指定设备上打开一路流并开始播放，返回新的流 token 与实际清晰度。
+func (engine *nativeEngine) nativeCastPlay(ctx context.Context, device nativeCastDevice, media providerMedia, title string, targetMS int64) (string, error) {
+	server, err := engine.nativeCastStreamServer()
+	if err != nil {
+		return "", err
+	}
+	address, token := server.nativeOpen(media)
+	metadata := nativeCastMetadata(title, address)
+	if _, err := nativeCastSOAP(ctx, device.ControlURL, device.ServiceType, "SetAVTransportURI", [][2]string{
+		{"InstanceID", "0"}, {"CurrentURI", address}, {"CurrentURIMetaData", metadata},
+	}); err != nil {
+		server.nativeRelease(token)
+		return "", err
+	}
+	if _, err := nativeCastSOAP(ctx, device.ControlURL, device.ServiceType, "Play", [][2]string{
+		{"InstanceID", "0"}, {"Speed", "1"},
+	}); err != nil {
+		server.nativeRelease(token)
+		return "", err
+	}
+	if targetMS > 0 {
+		_, _ = nativeCastSOAP(ctx, device.ControlURL, device.ServiceType, "Seek", [][2]string{
+			{"InstanceID", "0"}, {"Unit", "REL_TIME"}, {"Target", nativeCastTarget(targetMS)},
+		})
+	}
+	return token, nil
+}
+
+// 在已解析的线路里按清晰度选一路；quality 为 0 时取最高。
+func nativeCastPickMedia(choice nativePlaybackChoice, quality int) providerMedia {
+	if quality > 0 {
+		for _, option := range choice.media {
+			if option.Quality == quality {
+				return option
+			}
+		}
+	}
+	return choice.media[choice.index]
+}
+
 func (engine *nativeEngine) nativeCastStart(ctx context.Context, input nativeCastInput) (any, error) {
 	device, err := engine.nativeCastDevice(input.Device)
 	if err != nil {
@@ -553,45 +596,69 @@ func (engine *nativeEngine) nativeCastStart(ctx context.Context, input nativeCas
 	if !exists || choice.index < 0 || choice.index >= len(choice.media) {
 		return nil, errors.New("播放线路已失效，请重新解析播放")
 	}
-	server, err := engine.nativeCastStreamServer()
-	if err != nil {
-		return nil, err
-	}
-	media := choice.media[choice.index]
-	address, token := server.nativeOpen(media)
+	media := nativeCastPickMedia(choice, input.Quality)
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
 		title = "短剧"
 	}
-	metadata := nativeCastMetadata(title, address)
-	if _, err := nativeCastSOAP(ctx, device.ControlURL, device.ServiceType, "SetAVTransportURI", [][2]string{
-		{"InstanceID", "0"}, {"CurrentURI", address}, {"CurrentURIMetaData", metadata},
-	}); err != nil {
-		server.nativeRelease(token)
-		return nil, err
-	}
-	if _, err := nativeCastSOAP(ctx, device.ControlURL, device.ServiceType, "Play", [][2]string{
-		{"InstanceID", "0"}, {"Speed", "1"},
-	}); err != nil {
-		server.nativeRelease(token)
+	token, err := engine.nativeCastPlay(ctx, device, media, title, input.TargetMS)
+	if err != nil {
 		return nil, err
 	}
 	engine.castMu.Lock()
 	previous := engine.castSession
-	engine.castSession = &nativeCastSession{device: device, streamSession: token, session: input.Session, title: title, started: time.Now()}
+	server := engine.castServer
+	engine.castSession = &nativeCastSession{
+		device: device, streamSession: token, session: input.Session, title: title,
+		quality: media.Quality, qualities: choice.qualities, started: time.Now(),
+	}
 	engine.castMu.Unlock()
 	if previous != nil {
-		if previous.streamSession != "" && previous.streamSession != token {
+		if previous.streamSession != "" && previous.streamSession != token && server != nil {
 			server.nativeRelease(previous.streamSession)
 		}
 		if previous.device.ControlURL != device.ControlURL {
 			_, _ = nativeCastSOAP(ctx, previous.device.ControlURL, previous.device.ServiceType, "Stop", [][2]string{{"InstanceID", "0"}})
 		}
 	}
-	if input.TargetMS > 0 {
-		_, _ = nativeCastSOAP(ctx, device.ControlURL, device.ServiceType, "Seek", [][2]string{
-			{"InstanceID", "0"}, {"Unit", "REL_TIME"}, {"Target", nativeCastTarget(input.TargetMS)},
-		})
+	return engine.nativeCastStatusPayload(ctx), nil
+}
+
+// 切换清晰度：重新在设备上打开所选清晰度的流，保持当前进度。
+func (engine *nativeEngine) nativeCastQuality(ctx context.Context, quality int) (any, error) {
+	current := engine.nativeCastCurrent()
+	if current.streamSession == "" {
+		return nil, errors.New("当前没有进行中的投屏")
+	}
+	engine.mu.Lock()
+	choice, exists := engine.playbacks[current.session]
+	engine.mu.Unlock()
+	if !exists {
+		return nil, errors.New("播放线路已失效，请重新解析播放")
+	}
+	media := nativeCastPickMedia(choice, quality)
+	if media.Quality == current.quality {
+		return engine.nativeCastStatusPayload(ctx), nil
+	}
+	engine.castMu.Lock()
+	server := engine.castServer
+	engine.castMu.Unlock()
+	position := int64(0)
+	if payload, err := nativeCastSOAP(ctx, current.device.ControlURL, current.device.ServiceType, "GetPositionInfo", [][2]string{{"InstanceID", "0"}}); err == nil {
+		position = nativeCastMilliseconds(nativeCastTag(payload, "RelTime"))
+	}
+	token, err := engine.nativeCastPlay(ctx, current.device, media, current.title, position)
+	if err != nil {
+		return nil, err
+	}
+	engine.castMu.Lock()
+	if engine.castSession != nil && engine.castSession.streamSession == current.streamSession {
+		engine.castSession.streamSession = token
+		engine.castSession.quality = media.Quality
+	}
+	engine.castMu.Unlock()
+	if server != nil {
+		server.nativeRelease(current.streamSession)
 	}
 	return engine.nativeCastStatusPayload(ctx), nil
 }
@@ -606,6 +673,9 @@ func (engine *nativeEngine) nativeCastStatusPayload(ctx context.Context) map[str
 	result["deviceId"] = current.device.ID
 	result["title"] = current.title
 	result["startedAt"] = current.started.UnixMilli()
+	result["quality"] = current.quality
+	result["qualities"] = current.qualities
+	result["supportsVolume"] = current.device.RenderingControlURL != ""
 	state := ""
 	if payload, err := nativeCastSOAP(ctx, current.device.ControlURL, current.device.ServiceType, "GetTransportInfo", [][2]string{{"InstanceID", "0"}}); err == nil {
 		state = nativeCastTag(payload, "CurrentTransportState")
@@ -676,6 +746,16 @@ func (engine *nativeEngine) nativeCastVolume(ctx context.Context, input nativeCa
 	if current.device.RenderingControlURL == "" {
 		return nil, errors.New("该设备不支持音量调节")
 	}
+	if !input.HasVolume {
+		if payload, err := nativeCastSOAP(ctx, current.device.RenderingControlURL, nativeCastRendering, "GetVolume", [][2]string{
+			{"InstanceID", "0"}, {"Channel", "Master"},
+		}); err == nil {
+			if value, parseErr := strconv.Atoi(nativeCastTag(payload, "CurrentVolume")); parseErr == nil {
+				return map[string]any{"volume": value}, nil
+			}
+		}
+		return map[string]any{"volume": 0}, nil
+	}
 	volume := input.Volume
 	if volume < 0 {
 		volume = 0
@@ -713,6 +793,8 @@ func (engine *nativeEngine) nativeCast(ctx context.Context, command string, raw 
 		return engine.nativeCastSeek(ctx, input)
 	case "volume":
 		return engine.nativeCastVolume(ctx, input)
+	case "quality":
+		return engine.nativeCastQuality(ctx, input.Quality)
 	case "status":
 		return engine.nativeCastStatusPayload(ctx), nil
 	default:
