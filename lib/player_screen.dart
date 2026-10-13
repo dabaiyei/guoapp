@@ -727,6 +727,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           repository: widget.repository,
           onEpisode: (next) => _castEpisode(cast, next, generation),
           onQuality: (quality) => _castQuality(cast, quality, generation),
+          onDevice: (device) => _castSwitchDevice(cast, device, generation),
         ),
       ),
     );
@@ -803,6 +804,30 @@ class _PlayerScreenState extends State<PlayerScreen>
       title: '${widget.detail.drama.title} · 第 ${episode.number} 集',
       positionMs: position.inMilliseconds,
       quality: quality,
+    );
+  }
+
+  /// 投屏中换到另一台设备：用当前集与进度在新设备上继续播放。
+  Future<void> _castSwitchDevice(
+    CastController cast,
+    CastDevice device,
+    int generation,
+  ) async {
+    final index = _index;
+    if (index < 0 || index >= widget.detail.episodes.length) return;
+    final session = _plan?.session ?? '';
+    if (session.isEmpty) {
+      await _castEpisode(cast, index, generation);
+      return;
+    }
+    await cast.start(
+      device: device,
+      session: session,
+      title:
+          '${widget.detail.drama.title} · '
+          '第 ${widget.detail.episodes[index].number} 集',
+      positionMs: cast.status.position.inMilliseconds,
+      quality: cast.status.quality,
     );
   }
 

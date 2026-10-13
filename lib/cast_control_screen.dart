@@ -16,6 +16,7 @@ class CastControlScreen extends StatefulWidget {
     required this.repository,
     required this.onEpisode,
     required this.onQuality,
+    required this.onDevice,
   });
   final CastController controller;
   final DramaDetail detail;
@@ -23,6 +24,7 @@ class CastControlScreen extends StatefulWidget {
   final AppRepository repository;
   final Future<void> Function(int index) onEpisode;
   final Future<void> Function(int quality) onQuality;
+  final Future<void> Function(CastDevice device) onDevice;
   @override
   State<CastControlScreen> createState() => _CastControlScreenState();
 }
@@ -329,8 +331,8 @@ class _CastControlScreenState extends State<CastControlScreen> {
 
   Future<void> _switchDevice() async {
     final device = await showCastDevicePicker(context, widget.controller);
-    if (device == null) return;
-    await widget.onQuality(widget.controller.status.quality);
+    if (device == null || !mounted) return;
+    await widget.onDevice(device);
   }
 }
 
